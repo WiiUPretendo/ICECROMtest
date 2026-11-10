@@ -178,8 +178,11 @@ jobs:
         run: |
           set -e
           cd aosp
+          # The local remove-manifest already excluded all projects that once
+          # lived in cts/ development/ pdk/ and most of test/ — do NOT wipe
+          # whole top dirs here: test/app_compat/csuite now stays synced and
+          # registers the csuite_test soong module type.
           sudo rm -rf \
-            cts development pdk test \
             prebuilts/fullsdk-* prebuilts/ndk prebuilts/abi-dumps \
             prebuilts/vndk/v29 prebuilts/vndk/v30 prebuilts/vndk/v32 \
             prebuilts/vndk/v33 prebuilts/vndk/v34 \
