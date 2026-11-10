@@ -178,15 +178,11 @@ jobs:
         run: |
           set -e
           cd aosp
-          # The local remove-manifest already excluded all projects that once
-          # lived in cts/ development/ pdk/ and most of test/ — do NOT wipe
-          # whole top dirs here: test/app_compat/csuite now stays synced and
-          # registers the csuite_test soong module type.
-          sudo rm -rf \
-            prebuilts/fullsdk-* prebuilts/ndk prebuilts/abi-dumps \
-            prebuilts/vndk/v29 prebuilts/vndk/v30 prebuilts/vndk/v32 \
-            prebuilts/vndk/v33 prebuilts/vndk/v34 \
-            .repo
+          # The local remove-manifest already excluded the projects this
+          # step used to wipe (cts/dev/pdk/test trees, vndk v29-34) — do
+          # NOT delete them here: several are needed by soong now
+          # (platform/cts, test/app_compat/csuite, prebuilts/vndk/*).
+          sudo rm -rf prebuilts/fullsdk-* .repo
           df -h /
 
       - name: Install packaging dependencies
