@@ -5,9 +5,13 @@
 
 include build/make/target/board/BoardConfigMainlineCommon.mk
 
-# Architecture: 32-bit userspace only (stock is armeabi-v7a, MT6761/Cortex-A53)
+# Architecture: 32-bit userspace only (stock is armeabi-v7a, MT6761 =
+# 4x Cortex-A53, an ARMv8 core running AArch32). AOSP 14+ requires
+# armv8-a as ARCH_VARIANT for known ARMv8 cores (any other value is
+# rejected in combo/TARGET_linux-arm.mk), which compiles AArch32
+# (-march=armv8-a) code — exactly what this SoC runs.
 TARGET_ARCH := arm
-TARGET_ARCH_VARIANT := armv7-a-neon
+TARGET_ARCH_VARIANT := armv8-a
 TARGET_CPU_ABI := armeabi-v7a
 TARGET_CPU_ABI2 := armeabi
 TARGET_CPU_VARIANT := cortex-a53
