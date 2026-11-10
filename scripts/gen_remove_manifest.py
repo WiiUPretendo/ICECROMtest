@@ -57,6 +57,11 @@ PROTECT = (
     # packages/modules/Permission, build/bazel examples). Removing it
     # fails soong with "depends on undefined module cts_defaults".
     'platform/cts',
+    # The "tradefed" java library is defined in platform/tools/tradefederation
+    # (path tools/tradefederation/core) and referenced by kept test bp files
+    # (cuttlefish, system/core, Virtualization, platform_testing).
+    # contrib/ and /prebuilts stay pruned (separate project names).
+    'platform/tools/tradefederation',
     # Confusing failures, verified: platform_testing/tools/automotive/proxy
     # references cuttlefish_base and packages/modules/Virtualization/
     # microdroid references cuttlefish_crosvm; both kept-tree Android.bp
