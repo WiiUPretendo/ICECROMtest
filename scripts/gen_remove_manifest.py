@@ -70,6 +70,15 @@ PROTECT = (
     'device/generic/goldfish',
     'device/generic/goldfish-opengl',
     'device/generic/vulkan-cereal',
+    # packages/modules/vndk/apex declares apexes for ALL vndk versions
+    # (v29..v34); each depends on the .txt library lists and so files in
+    # its own prebuilts/vndk/vXX repo, so all of them must be synced even
+    # though we only build the v31 apex.
+    'platform/prebuilts/vndk/v29',
+    'platform/prebuilts/vndk/v30',
+    'platform/prebuilts/vndk/v32',
+    'platform/prebuilts/vndk/v33',
+    'platform/prebuilts/vndk/v34',
     # device/sample/etc/apns-full-conf.xml is copied to
     # system/etc/apns-conf.xml by the product config; without the repo
     # packaging fails with "missing and no known rule to make it".
