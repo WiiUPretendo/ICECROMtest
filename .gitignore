@@ -1,0 +1,8 @@
+# Local AOSP checkout and build output (synced/built by CI only)
+aosp/
+
+# Packaging output
+dist/
+
+# Build log
+build.log

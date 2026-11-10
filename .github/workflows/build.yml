@@ -1,0 +1,226 @@
+name: ICECROM build
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'device/**'
+      - '.github/workflows/**'
+      - 'scripts/**'
+      - 'META-INF/**'
+      - 'tools/**'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: icecrom-build
+  cancel-in-progress: false
+
+env:
+  AOSP_TAG: ${{ vars.AOSP_TAG || 'android15-release' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          # Root disk is 72G with only ~16G free by default; the AOSP
+          # checkout plus out/ need ~60G. Wipe preinstalled toolchains we
+          # never use (JDKs are re-downloaded by setup-java afterwards).
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/local/share/vcpkg \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/share/miniconda \
+            /opt/hostedtoolcache \
+            /home/linuxbrew
+          sudo docker image prune -af >/dev/null 2>&1 || true
+          sudo apt-get clean || true
+          df -h / /mnt || true
+
+      - name: Enable swap
+        run: |
+          # 16G RAM alone is not enough for javac/d8 peaks. Prefer the
+          # runner's extra disk (/mnt, 14G Azure temp disk) so the root
+          # filesystem keeps all its free space for source + out/.
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile
+          AVAIL_K=0
+          if [ -d /mnt ]; then
+            AVAIL_K="$(df --output=avail -k /mnt | tail -1 | tr -d ' ')"
+          fi
+          if [ "$AVAIL_K" -ge 12582912 ]; then
+            SWAPFILE=/mnt/swapfile
+          else
+            SWAPFILE=/swapfile
+          fi
+          echo "swapfile: $SWAPFILE (/mnt avail: ${AVAIL_K}k)"
+          if ! sudo fallocate -l 12G "$SWAPFILE" 2>/dev/null; then
+            sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=12288 status=progress
+          fi
+          sudo chmod 600 "$SWAPFILE"
+          sudo mkswap "$SWAPFILE"
+          sudo swapon "$SWAPFILE"
+          free -h
+          df -h / /mnt || true
+
+      - name: Install repo
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -sSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up JDK 21 (Android 17)
+        if: startsWith(env.AOSP_TAG, 'android-17') || startsWith(env.AOSP_TAG, 'android17')
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Sync AOSP
+        run: |
+          set -e
+          mkdir -p aosp
+          cd aosp
+          ok=0
+          for i in 1 2 3; do
+            echo "=== sync attempt $i of 3 (tag: $AOSP_TAG) ==="
+            if repo init -c --depth=1 --no-clone-bundle \
+                 -u https://android.googlesource.com/platform/manifest \
+                 -b "$AOSP_TAG" \
+               && repo sync -c --no-tags --no-clone-bundle --optimized-fetch --prune -j16; then
+              ok=1
+              break
+            fi
+            sleep 15
+          done
+          if [ "$ok" != "1" ]; then
+            echo "repo sync failed after 3 attempts"
+            exit 1
+          fi
+          df -h /
+
+      - name: Ensure VNDK 31 prebuilts
+        run: |
+          set -e
+          if [ ! -f aosp/prebuilts/vndk/v31/Android.bp ]; then
+            echo "prebuilts/vndk/v31 missing from manifest - cloning it directly"
+            rm -rf aosp/prebuilts/vndk/v31
+            mkdir -p aosp/prebuilts/vndk
+            git clone --depth=1 -b "$AOSP_TAG" \
+              https://android.googlesource.com/platform/prebuilts/vndk/v31 \
+              aosp/prebuilts/vndk/v31 \
+            || git clone --depth=1 -b android15-release \
+              https://android.googlesource.com/platform/prebuilts/vndk/v31 \
+              aosp/prebuilts/vndk/v31 \
+            || { echo "FATAL: cannot obtain prebuilts/vndk/v31"; exit 1; }
+          fi
+          test -f aosp/prebuilts/vndk/v31/Android.bp
+          echo "prebuilts/vndk/v31 OK"
+
+      - name: Prune unneeded projects
+        run: |
+          set -e
+          cd aosp
+          sudo rm -rf \
+            cts development pdk test \
+            prebuilts/fullsdk-* prebuilts/ndk prebuilts/abi-dumps \
+            prebuilts/vndk/v29 prebuilts/vndk/v30 prebuilts/vndk/v32 \
+            prebuilts/vndk/v33 prebuilts/vndk/v34 \
+            .repo
+          df -h /
+
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq android-sdk-libsparse-utils zip unzip e2fsprogs
+
+      - name: Install device tree into AOSP
+        run: cp -R device aosp/
+
+      - name: Build systemimage + productimage
+        run: |
+          set -o pipefail
+          df -h /
+          cd aosp
+          source build/envsetup.sh
+          lunch aosp_ice-userdebug
+          m systemimage productimage 2>&1 | tee ../build.log
+
+      - name: Free intermediate disk space
+        run: |
+          # The finished system.img/product.img are all packaging needs.
+          # Dropping build intermediates makes room for the raw image
+          # copies and the compressed zip on the root disk.
+          rm -rf aosp/out/soong/.intermediates \
+                 aosp/out/target/common \
+                 aosp/out/target/product/ice/obj
+          df -h /
+
+      - name: Package flashable zip
+        run: bash scripts/package_zip.sh
+
+      - name: Verify images
+        run: |
+          set -e
+          SYS=dist/pkg/system.img
+          PRD=dist/pkg/product.img
+          for f in "$SYS" "$PRD"; do
+            m="$(dd if="$f" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            if [ "$m" != "53ef" ]; then echo "$f: bad ext4 magic ($m)"; exit 1; fi
+          done
+          debugfs -R "stat /bin/init" "$SYS" 2>&1 | grep -q "Inode:" \
+            || { echo "system.img: /bin/init missing"; exit 1; }
+          debugfs -R "stat /system_ext" "$SYS" 2>&1 | grep -q "Inode:" \
+            || { echo "system.img: /system_ext missing"; exit 1; }
+          debugfs -R "stat /system_ext/apex/com.android.vndk.v31" "$SYS" 2>&1 | grep -q "Inode:" \
+            || { echo "system.img: com.android.vndk.v31 apex missing"; exit 1; }
+          debugfs -R "cat /build.prop" "$SYS" | grep -q "^ro.icecrom.build=1" \
+            || { echo "system.img: ro.icecrom.build marker missing"; exit 1; }
+          echo "Verification passed"
+
+      - name: Disk status on failure
+        if: failure()
+        run: |
+          df -h / /mnt || true
+          free -h || true
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          if-no-files-found: ignore
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="build-${{ github.run_number }}"
+          NOTES="ICECROM AOSP build for Redmi A1 (ice) - AOSP tag: $AOSP_TAG"
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --title "$TAG" --notes "$NOTES"
+          gh release upload "$TAG" dist/*.zip* --clobber
+          gh release view "$TAG"

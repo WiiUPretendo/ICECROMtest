@@ -1,0 +1,181 @@
+#!/sbin/sh
+# ICECROM flashable package - update-binary
+#
+# Runs under TWRP's /sbin/sh (mksh).
+#   $1 = API level, $2 = output fd, $3 = path to zip, $4 = retry count
+#
+# Flash order: system -> product -> vbmeta trio -> boot (boot last, because
+# writing it replaces TWRP with the stock boot image).
+
+OUTFD="$2"
+ZIPFILE="$3"
+
+ui_print() {
+  if [ -n "$OUTFD" ] && [ -e "/proc/self/fd/$OUTFD" ]; then
+    printf 'ui_print %s\nui_print\n' "$1" >> "/proc/self/fd/$OUTFD"
+  fi
+  echo "$1"
+}
+
+abort() {
+  ui_print " "
+  ui_print "!! $1"
+  ui_print "!! Installation aborted."
+  exit 1
+}
+
+ui_print " "
+ui_print "ICECROM - AOSP for Xiaomi Redmi A1 (ice)"
+ui_print " "
+
+# --- locate the partition nodes ------------------------------------------
+if [ -d /dev/block/platform/bootdevice/by-name ]; then
+  BASE=/dev/block/platform/bootdevice/by-name
+elif [ -d /dev/block/by-name ]; then
+  BASE=/dev/block/by-name
+else
+  abort "no by-name partition directory found"
+fi
+# lptools hardcodes /dev/block/by-name/super - make sure that path exists
+if [ ! -e /dev/block/by-name ]; then
+  ln -s "$BASE" /dev/block/by-name || abort "cannot create /dev/block/by-name"
+fi
+
+# --- determine the current slot ------------------------------------------
+SLOT="$(getprop ro.boot.slot_suffix)"
+if [ -z "$SLOT" ]; then
+  SLOT="$(sed -n 's/.*androidboot\.slot_suffix=\([^ ]*\).*/\1/p' /proc/cmdline | head -n 1)"
+fi
+[ -n "$SLOT" ] || abort "cannot determine slot suffix"
+ui_print "- Slot: $SLOT"
+
+# --- unpack the helpers ---------------------------------------------------
+WORK=/tmp/icecrom
+rm -rf "$WORK"
+mkdir -p "$WORK" || abort "cannot create $WORK"
+unzip -p "$ZIPFILE" images.txt > "$WORK/images.txt" \
+  || abort "images.txt missing from zip"
+unzip -p "$ZIPFILE" lptools_static > "$WORK/lptools_static" \
+  || abort "lptools_static missing from zip"
+chmod 755 "$WORK/lptools_static" || abort "chmod on lptools_static failed"
+LP="$WORK/lptools_static"
+
+# --- unmount the target filesystems (never /data) -------------------------
+for m in /system/system /system /system_root /vendor /product /system_ext; do
+  umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null || true
+done
+
+# --- helpers --------------------------------------------------------------
+# size in bytes of an entry from images.txt (strips any stray CR)
+img_size() {
+  awk -v n="$1" '$1 == n { gsub(/\r/, "", $2); print $2 }' "$WORK/images.txt"
+}
+
+# Resolve the logical partition name for base $1 (tries "name_a" then
+# "name") and make sure it is mapped writable. Result: LP_NAME.
+# lptools map hardcodes metadata_slot 0; both metadata slots hold the same
+# table on this device, so this is safe.
+LP_NAME=""
+resolve_logical() {
+  _base="$1"
+  for _cand in "${_base}${SLOT}" "$_base"; do
+    if [ -e "/dev/block/mapper/$_cand" ]; then
+      if [ "$(blockdev --getro "/dev/block/mapper/$_cand" 2>/dev/null)" = "1" ]; then
+        ui_print "- $_cand is mapped read-only, remapping writable"
+        "$LP" unmap "$_cand" >/dev/null 2>&1 || abort "lptools unmap $_cand failed"
+        "$LP" map "$_cand" >/dev/null 2>&1 || abort "lptools map $_cand failed"
+      fi
+      LP_NAME="$_cand"
+      return 0
+    fi
+    if "$LP" map "$_cand" >/dev/null 2>&1; then
+      LP_NAME="$_cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Grow the mapped partition behind $1 to at least $2 bytes, using free space
+# in the dynamic partition group. Uses the global LP_NAME.
+grow_to() {
+  _node="$1"
+  _want="$2"
+  _have="$(blockdev --getsize64 "$_node" 2>/dev/null || echo 0)"
+  [ "$_have" -ge "$_want" ] && return 0
+  _free="$("$LP" free 2>/dev/null | awk '/Free space:/ { print $3 }')"
+  [ -n "$_free" ] || abort "cannot determine super free space"
+  _need=$((_want - _have))
+  ui_print "- growing $_node by $_need bytes (super free: $_free)"
+  [ "$_free" -ge "$_need" ] || abort "not enough free space in super ($_free < $_need)"
+  _aligned=$(( (_want + 4095) / 4096 * 4096 ))
+  "$LP" unmap "$LP_NAME" >/dev/null 2>&1 || abort "unmap before resize failed"
+  "$LP" resize "$LP_NAME" "$_aligned" || abort "lptools resize of $LP_NAME failed"
+  "$LP" map "$LP_NAME" >/dev/null 2>&1 || abort "map after resize failed"
+  _have="$(blockdev --getsize64 "$_node" 2>/dev/null || echo 0)"
+  [ "$_have" -ge "$_want" ] || abort "partition still too small ($_have < $_want)"
+}
+
+# Stream $1 (zip entry) into block device $2, then verify the byte count
+# against images.txt (and the ext4 magic if $3 = ext4).
+write_image() {
+  _entry="$1"
+  _node="$2"
+  _check="${3:-}"
+  [ -e "$_node" ] || abort "partition node $_node not found"
+  ui_print "- writing $_entry -> $_node"
+  unzip -p "$ZIPFILE" "$_entry" | dd of="$_node" bs=1048576 2>"$WORK/dd.err"
+  _written="$(awk '{ for (i = 1; i <= NF; i++) if ($i == "bytes") { print $(i - 1); exit } }' "$WORK/dd.err")"
+  _want="$(img_size "$_entry")"
+  [ -n "$_want" ] || abort "no size entry for $_entry in images.txt"
+  [ -n "$_written" ] || abort "cannot determine bytes written for $_entry"
+  [ "$_written" -eq "$_want" ] \
+    || abort "$_entry: wrote $_written bytes, expected $_want"
+  if [ "$_check" = "ext4" ]; then
+    _magic="$(dd if="$_node" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+    [ "$_magic" = "53ef" ] || abort "$_entry: ext4 magic check failed ($_magic)"
+    ui_print "- $_entry verified ($_written bytes, ext4 magic ok)"
+  else
+    ui_print "- $_entry verified ($_written bytes)"
+  fi
+}
+
+# --- system ----------------------------------------------------------------
+ui_print "- preparing system logical partition"
+resolve_logical system || abort "cannot map logical partition 'system'"
+SYS_NODE="/dev/block/mapper/$LP_NAME"
+ui_print "- system logical name: $LP_NAME"
+SYS_SIZE="$(img_size system.img)"
+[ -n "$SYS_SIZE" ] || abort "system.img size missing from images.txt"
+grow_to "$SYS_NODE" "$SYS_SIZE"
+write_image system.img "$SYS_NODE" ext4
+
+# --- product ---------------------------------------------------------------
+ui_print "- preparing product logical partition"
+resolve_logical product || abort "cannot map logical partition 'product'"
+PRD_NODE="/dev/block/mapper/$LP_NAME"
+ui_print "- product logical name: $LP_NAME"
+PRD_SIZE="$(img_size product.img)"
+[ -n "$PRD_SIZE" ] || abort "product.img size missing from images.txt"
+grow_to "$PRD_NODE" "$PRD_SIZE"
+write_image product.img "$PRD_NODE" ext4
+
+# --- vbmeta: algorithm NONE + flags 3 = verification disabled -------------
+# (all three are physical by-name partitions; vbmeta is not slotted)
+write_image vbmeta.img "$BASE/vbmeta"
+write_image vbmeta_system.img "$BASE/vbmeta_system$SLOT"
+write_image vbmeta_vendor.img "$BASE/vbmeta_vendor$SLOT"
+
+# --- boot last: replaces TWRP with the stock boot image -------------------
+write_image boot.img "$BASE/boot$SLOT"
+
+sync
+
+ui_print " "
+ui_print "Installation complete: system, product, vbmeta and boot flashed."
+ui_print " "
+ui_print "NOTE: TWRP was replaced by the stock boot image."
+ui_print "To re-enter recovery later:"
+ui_print "  fastboot flash boot twrp-ice-boot.img"
+ui_print " "
+exit 0

@@ -1,0 +1,18 @@
+# Normalize text files to LF (critical: update-binary must be LF for mksh)
+* text=auto
+
+*.mk    text eol=lf
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.prop  text eol=lf
+*.rc    text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+META-INF/com/google/android/update-binary  text eol=lf
+META-INF/com/google/android/updater-script text eol=lf
+
+# Never touch these
+*.img   binary
+lptools_static binary
