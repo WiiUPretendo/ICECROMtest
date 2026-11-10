@@ -51,6 +51,22 @@ PROTECT = (
     # Android.bp files (art/test, frameworks/base use the type) and fails
     # with "unrecognized module type" without this repo.
     'platform/test/app_compat/csuite',
+    # The CTS tree (yes, 2.3G) defines cts_defaults and
+    # mts-target-sdk-version-current modules referenced by always-parsed
+    # Android.bp files in kept projects (external/skia,
+    # packages/modules/Permission, build/bazel examples). Removing it
+    # fails soong with "depends on undefined module cts_defaults".
+    'platform/cts',
+    # device/sample/etc/apns-full-conf.xml is copied to
+    # system/etc/apns-conf.xml by the product config; without the repo
+    # packaging fails with "missing and no known rule to make it".
+    'device/sample',
+    # Defines lint_api, imported by tools/ and packages/modules/*/lint.
+    'platform/prebuilts/cmdline-tools',
+    # Host tooling referenced by parts of the build; pruning it produces
+    # confusing failures late in the build (per aosplite's verified tier
+    # lists for android-15).
+    'platform/development',
 )
 
 
