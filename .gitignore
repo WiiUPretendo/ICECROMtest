@@ -6,3 +6,6 @@ dist/
 
 # Build log
 build.log
+
+# Python bytecode artifacts
+__pycache__/
