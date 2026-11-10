@@ -83,6 +83,11 @@ jobs:
           curl -sSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
+          # Keep git's per-process resource use low: heavy parallel
+          # index-pack threads (one set per concurrent clone) can starve
+          # the runner agent enough to lose communication with GitHub.
+          git config --global pack.threads 1
+          git config --global pack.windowMemory 256m
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -108,7 +113,8 @@ jobs:
             if repo init -c --depth=1 --no-clone-bundle \
                  -u https://android.googlesource.com/platform/manifest \
                  -b "$AOSP_TAG" \
-               && repo sync -c --no-tags --no-clone-bundle --optimized-fetch --prune -j16; then
+               && repo sync -j4 -c --no-tags --no-clone-bundle \
+                    --optimized-fetch --prune --fail-fast; then
               ok=1
               break
             fi
