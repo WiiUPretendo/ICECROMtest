@@ -33,7 +33,7 @@ jobs:
       - name: Free disk space
         run: |
           # Root disk is 72G with only ~16G free by default; the AOSP
-          # checkout plus out/ need ~60G. Wipe preinstalled toolchains we
+          # checkout plus out/ need ~50-60G. Wipe preinstalled toolchains we
           # never use (JDKs are re-downloaded by setup-java afterwards).
           sudo rm -rf \
             /usr/share/dotnet \
@@ -46,7 +46,17 @@ jobs:
             /usr/local/.ghcup \
             /usr/share/miniconda \
             /opt/hostedtoolcache \
-            /home/linuxbrew
+            /home/linuxbrew \
+            /usr/share/swift \
+            /usr/share/julia \
+            /usr/lib/mono \
+            /usr/share/mono \
+            /opt/az \
+            /opt/google/chrome \
+            /usr/local/lib/node_modules \
+            /var/lib/mysql \
+            /var/lib/postgresql
+          sudo rm -rf /usr/share/az_* 2>/dev/null || true
           sudo docker image prune -af >/dev/null 2>&1 || true
           sudo apt-get clean || true
           df -h / /mnt || true
@@ -105,26 +115,46 @@ jobs:
       - name: Sync AOSP
         run: |
           set -e
+          AVAIL_GB="$(df -BG --output=avail / | tail -1 | tr -dc '0-9')"
+          echo "Free root disk after cleanup: ${AVAIL_GB}G"
+          if [ "$AVAIL_GB" -lt 35 ]; then
+            echo "FATAL: needs at least 35G free before sync, found ${AVAIL_GB}G"
+            exit 1
+          fi
           mkdir -p aosp
           cd aosp
+          rm -f diskwatch.log
           ok=0
           for i in 1 2 3; do
             echo "=== sync attempt $i of 3 (tag: $AOSP_TAG) ==="
             if repo init -c --depth=1 --no-clone-bundle \
                  -u https://android.googlesource.com/platform/manifest \
-                 -b "$AOSP_TAG" \
-               && repo sync -j4 -c --no-tags --no-clone-bundle \
+                 -b "$AOSP_TAG"; then
+              # Trim the sync: generate a local remove-manifest from the
+              # manifest repo repo just checked out, so it stays correct
+              # for whichever AOSP tag was selected (see the script header).
+              python3 ../scripts/gen_remove_manifest.py
+              echo "Disk before sync:"; df -h /
+              while true; do echo "$(date -u) $(df -B1 --output=avail / | tail -1)" >> diskwatch.log; sleep 60; done &
+              WATCHER=$!
+              if repo sync -j4 -c --no-tags --no-clone-bundle \
                     --optimized-fetch --prune --fail-fast; then
-              ok=1
-              break
+                ok=1
+                kill $WATCHER 2>/dev/null || true
+                break
+              fi
+              kill $WATCHER 2>/dev/null || true
             fi
             sleep 15
           done
           if [ "$ok" != "1" ]; then
             echo "repo sync failed after 3 attempts"
+            cat diskwatch.log 2>/dev/null || true
+            echo "Disk after failed sync:"; df -h / || true
             exit 1
           fi
-          df -h /
+          echo "Disk after sync:"; df -h /
+          cat diskwatch.log 2>/dev/null || true
 
       - name: Ensure VNDK 31 prebuilts
         run: |
