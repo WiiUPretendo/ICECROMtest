@@ -65,6 +65,11 @@ PROTECT = (
     'device/google/cuttlefish',
     'device/google/cuttlefish_prebuilts',
     'device/google/cuttlefish_vmm',
+    # cuttlefish imports the goldfish soong namespace
+    # (shared/sensors/multihal); the emulator stack is one unit.
+    'device/generic/goldfish',
+    'device/generic/goldfish-opengl',
+    'device/generic/vulkan-cereal',
     # device/sample/etc/apns-full-conf.xml is copied to
     # system/etc/apns-conf.xml by the product config; without the repo
     # packaging fails with "missing and no known rule to make it".
