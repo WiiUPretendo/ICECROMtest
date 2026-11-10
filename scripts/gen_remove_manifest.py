@@ -46,6 +46,11 @@ PROTECT = (
     # references the bazel binary dir; without them soong_ui fails to
     # start ("Error parsing directory .../prebuilts/bazel/common/proto").
     'platform/prebuilts/bazel/common', 'platform/prebuilts/bazel/linux-x86_64',
+    # Registers the "csuite_test" module type via a bootstrap Go plugin
+    # (test/app_compat/csuite/tools/csuite_test); soong parses all
+    # Android.bp files (art/test, frameworks/base use the type) and fails
+    # with "unrecognized module type" without this repo.
+    'platform/test/app_compat/csuite',
 )
 
 
