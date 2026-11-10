@@ -42,6 +42,10 @@ PROTECT = (
     'platform/tools/metalava', 'platform/tools/security',
     'platform/tools/repohooks', 'platform/tools/apksig',
     'platform/tools/apkzlib',
+    # Soong bootstrap embeds protos from here and some build tooling
+    # references the bazel binary dir; without them soong_ui fails to
+    # start ("Error parsing directory .../prebuilts/bazel/common/proto").
+    'platform/prebuilts/bazel/common', 'platform/prebuilts/bazel/linux-x86_64',
 )
 
 
