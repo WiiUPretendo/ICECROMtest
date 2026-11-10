@@ -200,7 +200,24 @@ jobs:
           df -h /
           cd aosp
           source build/envsetup.sh
-          lunch aosp_ice-userdebug
+          # AOSP 14 QPR2+ requires a release name in the lunch combo
+          # (<product>-<release>-<variant>). Derive it from the release
+          # configs of the synced branch: pick the single release-quality
+          # config (trunk_staging = dev, root = default fallback). For
+          # android15-release this resolves to ap3a; the override env var
+          # lets us pin it if a future tag ships more than one.
+          if [ -n "$TARGET_RELEASE_OVERRIDE" ]; then
+            REL="$TARGET_RELEASE_OVERRIDE"
+          else
+            REL="$(ls build/release/release_configs/*.textproto 2>/dev/null \
+                  | grep -viE '/(root|trunk[^/]*|next)\.textproto$' \
+                  | head -1 | xargs -r -n1 basename | sed 's/\.textproto$//')"
+            if [ -z "$REL" ]; then
+              REL="trunk_staging"
+            fi
+          fi
+          echo "Using TARGET_RELEASE=$REL"
+          lunch "aosp_ice-$REL-userdebug"
           m systemimage productimage 2>&1 | tee ../build.log
 
       - name: Free intermediate disk space
