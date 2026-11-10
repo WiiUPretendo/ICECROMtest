@@ -57,6 +57,14 @@ PROTECT = (
     # packages/modules/Permission, build/bazel examples). Removing it
     # fails soong with "depends on undefined module cts_defaults".
     'platform/cts',
+    # Confusing failures, verified: platform_testing/tools/automotive/proxy
+    # references cuttlefish_base and packages/modules/Virtualization/
+    # microdroid references cuttlefish_crosvm; both kept-tree Android.bp
+    # files fail soong if the cuttlefish device tree trio is absent
+    # (also aosplite's verified stance: cuttlefish = NOT removed).
+    'device/google/cuttlefish',
+    'device/google/cuttlefish_prebuilts',
+    'device/google/cuttlefish_vmm',
     # device/sample/etc/apns-full-conf.xml is copied to
     # system/etc/apns-conf.xml by the product config; without the repo
     # packaging fails with "missing and no known rule to make it".
